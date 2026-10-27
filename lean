@@ -47,13 +47,12 @@ FIELDS = ["sex", "height_cm", "age", "activity_level", "weight_kg",
           "intake_kcal", "waist_cm", "neck_cm", "hip_cm"]
 
 # Which stored columns belong to each topic (used by --clear). deficit and
-# reference are calculated from other data, so they own none.
+# weightloss are calculated from other data, so they own none.
 TOPIC_FIELDS = {
-    "profile": ["sex", "height_cm", "age", "activity_level"],
-    "weight": ["weight_kg"],
-    "intake": ["intake_kcal"],
+    "profile": ["sex", "height_cm", "age", "activity_level", "weight_kg", "intake_kcal"],
     "bodyfat": ["waist_cm", "neck_cm", "hip_cm"],
 }
+TOPIC_LABELS = {"profile": "profile (including weight and intake)"}
 
 
 # --- UNIT PARSING -----------------------------------------------------
@@ -129,8 +128,13 @@ def kg_to_lb(kg):
     return kg * 2.20462
 
 
-def cm_to_in(cm):
-    return cm / 2.54
+def cm_to_ft_in(cm):
+    """Format centimeters as feet and inches, e.g. 6'5". Prefixed with ~
+    when the nearest whole inch isn't an (almost) exact match."""
+    total_in = cm / 2.54
+    feet, inches = divmod(round(total_in), 12)
+    approx = "" if abs(total_in - round(total_in)) < 0.05 else "~"
+    return f"{approx}{feet}'{inches}\""
 
 
 # --- CALCULATIONS -------------------------------------------------------
@@ -236,7 +240,7 @@ def compute_tdee(sex, height_cm, age, activity, weight_kg):
 # --- INTAKE SAFETY GUIDANCE -----------------------------------------------
 # Informational only -- never blocks an entry, just surfaces where it
 # falls relative to commonly-cited general guidelines. Rough deficit ->
-# rate-of-loss math (3500 kcal =~ 1 lb) is the same estimate used
+# rate-of-weightloss math (3500 kcal =~ 1 lb) is the same estimate used
 # elsewhere in this script; none of this is personalized medical advice.
 
 def rate_to_deficit(lb_per_week):
@@ -303,7 +307,46 @@ def prompt(label, default=None, cast=str, hint=None):
             print(f"  {e}")
 
 
+def prompt_log(label, current, cast, hint=None):
+    """Optional prompt for a value that's logged over time. Enter skips it
+    (nothing is recorded); the last logged value is shown for reference."""
+    shown = f" [{hint if hint is not None else current}]" if current is not None else ""
+    while True:
+        raw = input(f"{label}{shown} (Enter to skip): ").strip()
+        if not raw:
+            return None
+        try:
+            return cast(raw)
+        except ValueError as e:
+            print(f"  {e}")
+
+
 # --- EDIT HANDLERS -------------------------------------------------------
+
+def prompt_weight_intake(conn):
+    """Prompt for weight and intake; returns only the fields actually entered."""
+    cur_weight, _ = get_latest(conn, "weight_kg")
+    cur_intake, _ = get_latest(conn, "intake_kcal")
+    fields = {}
+    weight = prompt_log("Weight (e.g. 160lb or 72kg)", cur_weight,
+                         lambda r: parse_mass(r, "weight"),
+                         hint=f"{cur_weight:.1f}kg" if cur_weight is not None else None)
+    if weight is not None:
+        fields["weight_kg"] = weight
+    intake = prompt_log("Calorie intake today (kcal)", cur_intake, parse_kcal,
+                         hint=f"{cur_intake:.0f}" if cur_intake is not None else None)
+    if intake is not None:
+        fields["intake_kcal"] = intake
+    return fields
+
+
+def warn_if_low_intake(conn, fields):
+    if "intake_kcal" not in fields:
+        return
+    result = current_tdee(conn)
+    if result:
+        print_intake_warning(result[0], fields["intake_kcal"], result[1])
+
 
 def edit_profile(conn):
     cur_sex, _ = get_latest(conn, "sex")
@@ -319,34 +362,23 @@ def edit_profile(conn):
     print(f"Activity levels: {', '.join(ACTIVITY_LEVELS)}")
     activity = prompt("Activity level", cur_activity, parse_activity)
 
-    insert_entry(conn, sex=sex, height_cm=height, age=age, activity_level=activity)
+    fields = dict(sex=sex, height_cm=height, age=age, activity_level=activity)
+    fields.update(prompt_weight_intake(conn))
+    insert_entry(conn, **fields)
     print("\n[+] Profile updated.")
-
-
-def edit_weight(conn):
-    cur_weight, _ = get_latest(conn, "weight_kg")
-    weight = prompt("Weight (e.g. 160lb or 72kg)", cur_weight,
-                     lambda r: parse_mass(r, "weight"),
-                     hint=f"{cur_weight:.1f}kg" if cur_weight else None)
-    insert_entry(conn, weight_kg=weight)
-    print("\n[+] Weight logged.")
-
-
-def edit_intake(conn):
-    cur_intake, _ = get_latest(conn, "intake_kcal")
-    intake = prompt("Calorie intake today (kcal)", cur_intake, parse_kcal,
-                     hint=f"{cur_intake:.0f}" if cur_intake else None)
-    insert_entry(conn, intake_kcal=intake)
-    print("\n[+] Intake logged.")
-    result = current_tdee(conn)
-    if result:
-        print_intake_warning(result[0], intake, result[1])
+    warn_if_low_intake(conn, fields)
 
 
 def edit_deficit(conn):
-    # deficit has no inputs of its own -- it's weight and intake together.
-    edit_weight(conn)
-    edit_intake(conn)
+    # Shortcut for the two inputs deficit depends on, without walking
+    # through the rest of the profile.
+    fields = prompt_weight_intake(conn)
+    if not fields:
+        print("\nNothing logged.")
+        return
+    insert_entry(conn, **fields)
+    print("\n[+] Logged.")
+    warn_if_low_intake(conn, fields)
 
 
 def edit_bodyfat(conn):
@@ -355,16 +387,16 @@ def edit_bodyfat(conn):
         print("[-] Set your profile first: lean --profile --edit")
         sys.exit(1)
 
-    cur_waist, _ = get_latest(conn, "waist_cm")
     cur_neck, _ = get_latest(conn, "neck_cm")
+    cur_waist, _ = get_latest(conn, "waist_cm")
     cur_hip, _ = get_latest(conn, "hip_cm")
 
-    waist = prompt("Waist (e.g. 34in or 86cm)", cur_waist,
-                    lambda r: parse_length(r, "waist"),
-                    hint=f"{cur_waist:.1f}cm" if cur_waist else None)
     neck = prompt("Neck (e.g. 15in or 38cm)", cur_neck,
                    lambda r: parse_length(r, "neck"),
                    hint=f"{cur_neck:.1f}cm" if cur_neck else None)
+    waist = prompt("Waist (e.g. 34in or 86cm)", cur_waist,
+                    lambda r: parse_length(r, "waist"),
+                    hint=f"{cur_waist:.1f}cm" if cur_waist else None)
 
     fields = dict(waist_cm=waist, neck_cm=neck)
     if sex == "f":
@@ -380,53 +412,38 @@ def edit_bodyfat(conn):
 
 def display_profile(conn):
     sex, _ = get_latest(conn, "sex")
-    height, _ = get_latest(conn, "height_cm")
     age, _ = get_latest(conn, "age")
+    height, _ = get_latest(conn, "height_cm")
+    weight, weight_ts = get_latest(conn, "weight_kg")
     activity, _ = get_latest(conn, "activity_level")
+    intake, intake_ts = get_latest(conn, "intake_kcal")
 
-    if not any([sex, height, age, activity]):
+    if not any(v is not None for v in (sex, height, age, activity, weight, intake)):
         print("No profile set yet. Run: lean --profile --edit")
         return
 
     print("----- Profile -----")
     print(f"Sex:             {sex or 'not set'}")
-    print(f"Height:          {f'{height:.1f}cm ({cm_to_in(height):.1f}in)' if height else 'not set'}")
     print(f"Age:             {age if age else 'not set'}")
+    print(f"Height:          {f'{height:.1f}cm ({cm_to_ft_in(height)})' if height else 'not set'}")
+    print(f"Weight:          {f'{kg_to_lb(weight):.1f} lb ({weight:.1f} kg)' if weight is not None else 'not set'}")
+    print(f"Intake:          {f'{intake:.0f} kcal' if intake is not None else 'not set'}")
     print(f"Activity level:  {activity or 'not set'}")
 
 
-def display_weight(conn):
-    weight, weight_ts = get_latest(conn, "weight_kg")
-    if weight is None:
-        print("No weight logged yet. Run: lean --weight --edit")
-        return
-    print("----- Weight -----")
-    print(f"{kg_to_lb(weight):.1f} lb ({weight:.1f} kg) as of {weight_ts[:10]}")
-
-
-def display_intake(conn):
-    intake, intake_ts = get_latest(conn, "intake_kcal")
-    if intake is None:
-        print("No intake logged yet. Run: lean --intake --edit")
-        return
-    print("----- Intake -----")
-    print(f"{intake:.0f} kcal (as of {intake_ts[:10]})")
-
-
-def display_reference(conn):
+def display_weightloss(conn):
     require_profile(conn)
     result = current_tdee(conn)
     if result is None:
-        print("[-] Log your weight first: lean --weight --edit")
+        print("[-] Log your weight first: lean --profile --edit")
         sys.exit(1)
     tdee, sex = result
     g = deficit_guidance(tdee, sex)
-    print("----- Reference -----")
+    print("----- Weightloss -----")
     print(f"TDEE:                    {tdee:.0f} kcal/day (maintenance)")
     print(f"Mild weight loss        (-0.5 lb/wk):  ~{g['mild']:.0f} kcal/day")
     print(f"Weight loss             (-1.0 lb/wk):  ~{g['moderate']:.0f} kcal/day")
     print(f"Extreme weight loss     (-2.0 lb/wk):  ~{g['upper_2lb']:.0f} kcal/day")
-    print(f"Safe minimum for you:    ~{g['effective_floor']:.0f} kcal/day")
     intake, _ = get_latest(conn, "intake_kcal")
     if intake is not None:
         print_intake_warning(tdee, intake, sex)
@@ -459,7 +476,7 @@ def display_deficit(conn):
     weight, _ = get_latest(conn, "weight_kg")
     intake, intake_ts = get_latest(conn, "intake_kcal")
     if weight is None or intake is None:
-        print("[-] Log your weight and intake first: lean --weight --edit, lean --intake --edit")
+        print("[-] Log your weight and intake first: lean --profile --edit")
         sys.exit(1)
 
     tdee = compute_tdee(sex, height, age, activity, weight)
@@ -468,12 +485,12 @@ def display_deficit(conn):
 
     print("----- Deficit -----")
     print(f"TDEE:            {tdee:.0f} kcal/day")
-    print(f"Intake:          {intake:.0f} kcal (as of {intake_ts[:10]})")
+    print(f"Intake:          {intake:.0f} kcal")
     if deficit > 0:
-        print(f"Deficit:         {deficit:.0f} kcal/day")
+        print(f"Deficit:         -{deficit:.0f} kcal/day")
         print(f"Est. weekly change: -{weekly_lb:.2f} lb (rough estimate)")
     elif deficit < 0:
-        print(f"Surplus:         {abs(deficit):.0f} kcal/day")
+        print(f"Surplus:         +{abs(deficit):.0f} kcal/day")
         print(f"Est. weekly change: +{weekly_lb:.2f} lb (rough estimate)")
     else:
         print("Deficit:         0 kcal/day (maintenance)")
@@ -493,18 +510,19 @@ def prune_empty_rows(conn):
 
 
 def clear_topic(conn, topic, assume_yes=False):
-    if topic == "deficit":
-        print("[-] deficit is calculated from weight and intake, so it stores nothing itself.")
-        print("    Clear those instead: lean --weight --edit --clear / lean --intake --edit --clear")
+    if topic not in TOPIC_FIELDS:
+        print(f"[-] {topic} is calculated from the data in your profile, so it stores nothing itself.")
+        print("    To clear that data: lean --profile --edit --clear")
         sys.exit(1)
     fields = TOPIC_FIELDS[topic]
+    label = TOPIC_LABELS.get(topic, topic)
     n = conn.execute(
         f"SELECT COUNT(*) FROM entries WHERE {' OR '.join(f + ' IS NOT NULL' for f in fields)}"
     ).fetchone()[0]
     if n == 0:
         print(f"Nothing stored for {topic}.")
         return
-    print(f"This permanently deletes all {n} stored {topic} entr{'y' if n == 1 else 'ies'}.")
+    print(f"This permanently deletes all {n} stored {label} entr{'y' if n == 1 else 'ies'}.")
     if not assume_yes and not confirm("Continue?", default=False):
         print("[!] Cancelled. Nothing was changed.")
         return
@@ -516,11 +534,9 @@ def clear_topic(conn, topic, assume_yes=False):
 
 # --- DISPATCH -------------------------------------------------------------
 
-DISPLAY_HANDLERS = {"profile": display_profile, "weight": display_weight,
-                     "intake": display_intake, "bodyfat": display_bodyfat,
-                     "deficit": display_deficit, "reference": display_reference}
-EDIT_HANDLERS = {"profile": edit_profile, "weight": edit_weight,
-                  "intake": edit_intake, "bodyfat": edit_bodyfat,
+DISPLAY_HANDLERS = {"profile": display_profile, "bodyfat": display_bodyfat,
+                     "deficit": display_deficit, "weightloss": display_weightloss}
+EDIT_HANDLERS = {"profile": edit_profile, "bodyfat": edit_bodyfat,
                   "deficit": edit_deficit}
 TOPICS = tuple(DISPLAY_HANDLERS)
 
@@ -531,19 +547,17 @@ def main():
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
 examples:
-  lean --weight                  show current weight
-  lean --weight --edit           log a new weight
-  lean --weight --edit --clear   delete everything stored for a topic
-  lean --reference               TDEE and calorie reference points
+  lean --profile                 show profile, weight and intake
+  lean --profile --edit          update profile, weight and intake
+  lean --profile --edit --clear  delete everything stored for a topic
+  lean --weightloss              TDEE and calorie weightloss points
 """)
     topic = parser.add_mutually_exclusive_group(required=True)
-    topic.add_argument("--profile", action="store_true", help="sex, height, age, activity level")
-    topic.add_argument("--weight", action="store_true", help="current weight")
-    topic.add_argument("--intake", action="store_true", help="daily calorie intake")
-    topic.add_argument("--bodyfat", action="store_true", help="estimated body fat %% and category")
-    topic.add_argument("--deficit", action="store_true", help="today's calorie deficit/surplus")
-    topic.add_argument("--reference", action="store_true",
-                       help="TDEE and calorie reference points (calculated; display only)")
+    topic.add_argument("--profile", action="store_true", help="sex, height, age, activity level, weight, intake")
+    topic.add_argument("--bodyfat", action="store_true", help="estimated body fat %% and category")    
+    topic.add_argument("--deficit", action="store_true", help="today's calorie deficit/surplus (--edit logs weight and intake)")
+    topic.add_argument("--weightloss", action="store_true",
+                       help="TDEE and calorie weightloss points (calculated; display only)")
 
     parser.add_argument("--edit", action="store_true", help="update values")
     parser.add_argument("--clear", action="store_true",
@@ -553,8 +567,8 @@ examples:
     args = parser.parse_args()
     if args.clear and not args.edit:
         parser.error("--clear must be combined with --edit")
-    if args.reference and (args.edit or args.clear):
-        parser.error("--reference is calculated from your profile and weight; it can't be edited or cleared")
+    if args.weightloss and (args.edit or args.clear):
+        parser.error("--weightloss is calculated from your profile and weight; it can't be edited or cleared")
     topic_name = next(t for t in TOPICS if getattr(args, t))
 
     conn = get_conn()
