@@ -12,7 +12,8 @@ It's a single Python script with no dependencies. Your data is stored locally in
 - Estimate body fat percentage from neck, waist (and hip) measurements
 - Show the body fat ranges for each category, matched to your sex
 - Project how much weight and how many weeks it would take to move from one body fat percentage to another
-- See calorie targets for different rates of weight loss, with a warning if your intake is below a general safe minimum
+- See calorie targets for different rates of weight loss or weight gain, with a warning if your intake is below a general safe minimum
+- Run every report at once with `--all`
 
 ## Requirements
 
@@ -38,68 +39,88 @@ Or just run it in place with `./lean` or `python3 lean`.
 ## Quick start
 
 ```bash
-lean -p -e                # set up your profile, weight and intake
-lean -d                   # see your daily deficit
-lean --wl                 # see calorie targets for weight loss
-lean --bf -e              # log neck/waist measurements
-lean --bf                 # see your body fat estimate
-lean --bf 22 17           # how long to go from 22% to 17% body fat
-lean --bf -r              # body fat ranges for each category
-lean --all                # show everything at once
+lean --profile --edit     # set up your profile, weight and intake
+lean --intake --deficit   # see your daily calorie deficit
+lean --weight --loss      # see calorie targets for weight loss
+lean --weight --gain      # see calorie targets for weight gain
+lean --bodyfat --edit     # log neck/waist measurements
+lean --bodyfat            # see your body fat estimate
+lean --bodyfat 22 17      # how long to go from 22% to 17% body fat
+lean --bodyfat --range    # body fat ranges for each category
+lean --all                # run every report
 ```
 
 ## Commands
 
-Each topic has a short form and longer aliases; they all do the same thing.
+Options use their full names. The only short option is `-y`.
 
-| Topic | Options | Shows |
+| Topic | Option | Shows |
 | --- | --- | --- |
-| Profile | `-p`, `--profile` | Sex, age, height, weight, intake, activity level |
-| Body fat | `--bf`, `--bfp`, `--bodyfat`, `--body-fat-percentage` | Estimated body fat % and category |
-| Deficit | `-d`, `--deficit` | Today's calorie deficit or surplus |
-| Weight loss | `--wl`, `--weight-loss`, `--weightloss` | Your TDEE and calorie targets for weight loss |
-| All | `--all` | Profile, body fat, deficit and weight loss in one go |
+| Profile | `--profile` | Sex, age, height, weight, intake, activity level |
+| Weight | `--weight` | Your logged weight |
+| Intake | `--intake` | Your logged calorie intake |
+| Body fat | `--bodyfat` (or `--body-fat-percentage`) | Estimated body fat % and category |
+| All | `--all` | Every report below, back to back |
 
 Modifiers:
 
-| Option | Meaning |
-| --- | --- |
-| `-e`, `--edit` | Update values instead of showing them |
-| `-c`, `--clear` | With `-e`, delete all stored data for the topic |
-| `-y`, `--yes` | Skip the `--clear` confirmation |
-| `-r`, `--range` | With `--bf`, show the body fat ranges for each category |
+| Option | Goes with | Meaning |
+| --- | --- | --- |
+| `--loss` | `--weight` | Calorie targets for weight loss |
+| `--gain` | `--weight` | Calorie targets for weight gain |
+| `--deficit` | `--intake` | Your calorie deficit |
+| `--surplus` | `--intake` | Your calorie surplus |
+| `--range` | `--bodyfat` | The body fat ranges for each category |
+| `--edit` | `--profile`, `--weight`, `--intake`, `--bodyfat` | Update values instead of showing them |
+| `--clear` | `--edit` | Delete all stored data for the topic |
+| `-y` | `--clear` | Skip the confirmation prompt |
 
 ### Common commands
 
 | Command | What it does |
 | --- | --- |
-| `lean -p` | Show your profile, weight and intake |
-| `lean -p -e` | Update your profile, weight and intake |
-| `lean --bf` | Show your estimated body fat % and category |
-| `lean --bf -e` | Log neck and waist (and hip for women) measurements |
-| `lean --bf -r` | Show the body fat ranges (obese to essential fat) for your sex |
-| `lean --bf 22 17` | Project the weight change and time to go from 22% to 17% body fat |
-| `lean --bf 17` | Same, starting from your measured body fat |
-| `lean -d` | Show today's calorie deficit or surplus |
-| `lean -d -e` | Quickly log just weight and intake |
-| `lean --wl` | Show your TDEE and calorie targets for weight loss |
-| `lean --all` | Show all four reports back to back |
-| `lean -p -e -c` | Delete all stored profile data (including weight and intake) |
-| `lean --bf -e -c` | Delete all stored body fat measurements |
+| `lean --profile` | Show your profile, weight and intake |
+| `lean --profile --edit` | Update your profile, weight and intake |
+| `lean --weight` | Show your logged weight |
+| `lean --weight --edit` | Log your weight (press Enter to skip) |
+| `lean --weight --loss` | Show your TDEE and calorie targets for losing 0.5, 1 or 2 lb/week |
+| `lean --weight --gain` | Show your TDEE and calorie targets for gaining 0.5, 1 or 2 lb/week |
+| `lean --intake` | Show your logged calorie intake |
+| `lean --intake --edit` | Log your intake (press Enter to skip) |
+| `lean --intake --deficit` | Show your calorie deficit and estimated weekly loss |
+| `lean --intake --surplus` | Show your calorie surplus and estimated weekly gain |
+| `lean --bodyfat` | Show your estimated body fat % and category |
+| `lean --bodyfat --edit` | Log neck and waist (and hip for women) measurements |
+| `lean --bodyfat --range` | Show the body fat ranges (obese to essential fat) for your sex |
+| `lean --bodyfat 22 17` | Project the weight change and time to go from 22% to 17% body fat |
+| `lean --bodyfat 17` | Same, starting from your measured body fat |
+| `lean --all` | Run every report |
+| `lean --profile --edit --clear` | Delete all stored profile data (including weight and intake) |
+| `lean --weight --edit --clear` | Delete all logged weights |
+| `lean --intake --edit --clear` | Delete all logged intake values |
+| `lean --bodyfat --edit --clear` | Delete all stored body fat measurements |
+
+If you ask for `--intake --deficit` while you're actually in a surplus (or the other way around), `lean` says so and shows the real number, so you always see where you stand.
 
 ### Combining options
 
 You can give more than one topic, and they run in the order you type them:
 
 ```bash
-lean -p --bfp -e      # edit your profile, then your body fat measurements
-lean --bf -p          # show body fat, then your profile
-lean -p --bf -e -c    # clear your profile, then your body fat measurements
+lean --weight --intake --edit            # log your weight, then your intake
+lean --profile --bodyfat --edit          # edit your profile, then your body fat measurements
+lean --bodyfat --profile                 # show body fat, then your profile
+lean --weight --loss --gain              # show both sets of targets
+lean --profile --bodyfat --edit --clear  # clear your profile, then your body fat measurements
 ```
 
-Short flags can be bundled, so `lean -pe` is the same as `lean -p -e`. If one topic can't run (for example, you haven't logged measurements yet), the rest still run and `lean` exits with status 1 at the end.
+If one topic can't run (for example, you haven't logged measurements yet), the rest still run and `lean` exits with status 1 at the end.
 
-`--wl` and `--all` are calculated from your other data, so they can't be edited or cleared. The same goes for clearing `-d`; to clear that data, clear your profile.
+`--loss`, `--gain`, `--deficit`, `--surplus` and `--range` only show reports calculated from your other data, so they can't be used with `--edit` or `--clear`.
+
+### `--all`
+
+`lean --all` runs every report, in this order: profile, weight, intake, body fat, body fat ranges, deficit, surplus, weight loss, weight gain. Because it shows both, one of the deficit and surplus reports will tell you it doesn't apply. The body fat projection (`--bodyfat 22 17`) isn't included, since it needs numbers from you. `--all` is display only and can't be combined with other options.
 
 ### Entering values
 
@@ -128,29 +149,36 @@ Weight:          160.0 lb (72.6 kg)
 Intake:          2200 kcal
 Activity level:  moderate
 
-$ lean --deficit
+$ lean --intake --deficit
 ----- Deficit -----
 TDEE:            2625 kcal/day
 Intake:          2200 kcal
 Deficit:         -425 kcal/day
 Est. weekly change: -0.85 lb (rough estimate)
 
-$ lean --weightloss
------ Weightloss -----
+$ lean --weight --loss
+----- Weight Loss -----
 TDEE:                    2625 kcal/day (maintenance)
 Mild weight loss        (-0.5 lb/wk):  ~2375 kcal/day
 Weight loss             (-1.0 lb/wk):  ~2125 kcal/day
 Extreme weight loss     (-2.0 lb/wk):  ~1625 kcal/day
+
+$ lean --weight --gain
+----- Weight Gain -----
+TDEE:                    2625 kcal/day (maintenance)
+Mild weight gain        (+0.5 lb/wk):  ~2875 kcal/day
+Weight gain             (+1.0 lb/wk):  ~3125 kcal/day
+Extreme weight gain     (+2.0 lb/wk):  ~3625 kcal/day
 ```
 
 A height shown with `~` (like `~5'10"`) means the measurement is close to, but not exactly, that many feet and inches.
 
 ### Body fat ranges
 
-`lean --bf -r` (or `--range`) lists the body fat categories from highest to lowest. The ranges differ by sex, so it uses the sex in your profile; if none is set yet, it shows both. If you've logged measurements, your own category is marked.
+`lean --bodyfat --range` lists the body fat categories from highest to lowest. The ranges differ by sex, so it uses the sex in your profile; if none is set yet, it shows both. If you've logged measurements, your own category is marked.
 
 ```
-$ lean --bf -r
+$ lean --bodyfat --range
 ----- Body Fat Ranges (male) -----
 Obese          25% or more
 Average        18-24%
@@ -159,7 +187,7 @@ Athletes       6-13%
 Essential Fat  5% or less
 ```
 
-The female ranges are Obese 32% or more, Average 25-31%, Fitness 21-24%, Athletes 14-20%, and Essential Fat 13% or less. `-r` only goes with `--bf`, and can't be combined with `--all`, `--edit`, `--clear` or percentages.
+The female ranges are Obese 32% or more, Average 25-31%, Fitness 21-24%, Athletes 14-20%, and Essential Fat 13% or less. `--range` only goes with `--bodyfat`, and can't be combined with `--all`, `--edit`, `--clear` or percentages.
 
 ### Body fat projection
 
@@ -197,7 +225,7 @@ The time estimates are shown at your current intake (if it moves you toward the 
 - **Deficit** is your TDEE minus your latest logged intake. Weekly change is estimated using 3,500 kcal per pound.
 - **Body fat** uses the U.S. Navy method, then maps the result to an ACE category (Essential Fat, Athletes, Fitness, Average, Obese). It needs your profile (sex and height) plus neck and waist measurements, and hip for women.
 - **Projection:** assumes your lean mass stays the same, so the whole weight change is fat: goal weight = lean mass / (1 - goal body fat). Time is the fat change divided by the weekly rate, at 3,500 kcal per pound.
-- **Safe minimum warning:** if your logged intake is below the higher of the 2 lb/week target or a general floor (1,500 kcal for men, 1,200 kcal for women), `lean` prints a warning. This shows after logging an intake and in `--deficit` and `--weightloss`. It never blocks you from logging a value.
+- **Safe minimum warning:** if your logged intake is below the higher of the 2 lb/week target or a general floor (1,500 kcal for men, 1,200 kcal for women), `lean` prints a warning. This shows after logging an intake and in `--intake --deficit`, `--intake --surplus` and `--weight --loss`. It never blocks you from logging a value.
 
 ## Where your data lives
 

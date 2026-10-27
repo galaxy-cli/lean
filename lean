@@ -46,10 +46,13 @@ BODYFAT_CATEGORIES = {
 FIELDS = ["sex", "height_cm", "age", "activity_level", "weight_kg",
           "intake_kcal", "waist_cm", "neck_cm", "hip_cm"]
 
-# Which stored columns belong to each topic (used by --clear). deficit and
-# weightloss are calculated from other data, so they own none.
+# Which stored columns belong to each topic (used by --clear). The reports
+# (--loss, --gain, --deficit, --surplus, --range) are calculated from other
+# data, so they own none.
 TOPIC_FIELDS = {
     "profile": ["sex", "height_cm", "age", "activity_level", "weight_kg", "intake_kcal"],
+    "weight": ["weight_kg"],
+    "intake": ["intake_kcal"],
     "bodyfat": ["waist_cm", "neck_cm", "hip_cm"],
 }
 TOPIC_LABELS = {"profile": "profile (including weight and intake)"}
@@ -352,20 +355,27 @@ def prompt_log(label, current, cast, hint=None):
 
 # --- EDIT HANDLERS -------------------------------------------------------
 
+def prompt_weight(conn):
+    """Prompt for weight; returns {} if skipped."""
+    cur, _ = get_latest(conn, "weight_kg")
+    val = prompt_log("Weight (e.g. 160lb or 72kg)", cur,
+                      lambda r: parse_mass(r, "weight"),
+                      hint=f"{cur:.1f}kg" if cur is not None else None)
+    return {} if val is None else {"weight_kg": val}
+
+
+def prompt_intake(conn):
+    """Prompt for calorie intake; returns {} if skipped."""
+    cur, _ = get_latest(conn, "intake_kcal")
+    val = prompt_log("Calorie intake today (kcal)", cur, parse_kcal,
+                      hint=f"{cur:.0f}" if cur is not None else None)
+    return {} if val is None else {"intake_kcal": val}
+
+
 def prompt_weight_intake(conn):
     """Prompt for weight and intake; returns only the fields actually entered."""
-    cur_weight, _ = get_latest(conn, "weight_kg")
-    cur_intake, _ = get_latest(conn, "intake_kcal")
-    fields = {}
-    weight = prompt_log("Weight (e.g. 160lb or 72kg)", cur_weight,
-                         lambda r: parse_mass(r, "weight"),
-                         hint=f"{cur_weight:.1f}kg" if cur_weight is not None else None)
-    if weight is not None:
-        fields["weight_kg"] = weight
-    intake = prompt_log("Calorie intake today (kcal)", cur_intake, parse_kcal,
-                         hint=f"{cur_intake:.0f}" if cur_intake is not None else None)
-    if intake is not None:
-        fields["intake_kcal"] = intake
+    fields = prompt_weight(conn)
+    fields.update(prompt_intake(conn))
     return fields
 
 
@@ -398,15 +408,22 @@ def edit_profile(conn):
     warn_if_low_intake(conn, fields)
 
 
-def edit_deficit(conn):
-    # Shortcut for the two inputs deficit depends on, without walking
-    # through the rest of the profile.
-    fields = prompt_weight_intake(conn)
+def edit_weight(conn):
+    fields = prompt_weight(conn)
     if not fields:
         print("\nNothing logged.")
         return
     insert_entry(conn, **fields)
-    print("\n[+] Logged.")
+    print("\n[+] Weight logged.")
+
+
+def edit_intake(conn):
+    fields = prompt_intake(conn)
+    if not fields:
+        print("\nNothing logged.")
+        return
+    insert_entry(conn, **fields)
+    print("\n[+] Intake logged.")
     warn_if_low_intake(conn, fields)
 
 
@@ -460,22 +477,40 @@ def display_profile(conn):
     print(f"Activity level:  {activity or 'not set'}")
 
 
-def display_weightloss(conn):
+def display_weight(conn):
+    weight, _ = get_latest(conn, "weight_kg")
+    if weight is None:
+        print("No weight logged yet. Run: lean --weight --edit")
+        return
+    print("----- Weight -----")
+    print(f"Weight:          {kg_to_lb(weight):.1f} lb ({weight:.1f} kg)")
+
+
+def display_weight_change(conn, direction):
+    """Calorie targets for weight loss ("loss") or weight gain ("gain")."""
     require_profile(conn)
     result = current_tdee(conn)
     if result is None:
-        print("[-] Log your weight first: lean --profile --edit")
+        print("[-] Log your weight first: lean --weight --edit")
         sys.exit(1)
     tdee, sex = result
-    g = deficit_guidance(tdee, sex)
-    print("----- Weightloss -----")
-    print(f"TDEE:                    {tdee:.0f} kcal/day (maintenance)")
-    print(f"Mild weight loss        (-0.5 lb/wk):  ~{g['mild']:.0f} kcal/day")
-    print(f"Weight loss             (-1.0 lb/wk):  ~{g['moderate']:.0f} kcal/day")
-    print(f"Extreme weight loss     (-2.0 lb/wk):  ~{g['upper_2lb']:.0f} kcal/day")
-    intake, _ = get_latest(conn, "intake_kcal")
-    if intake is not None:
-        print_intake_warning(tdee, intake, sex)
+    if direction == "loss":
+        g = deficit_guidance(tdee, sex)
+        print("----- Weight Loss -----")
+        print(f"TDEE:                    {tdee:.0f} kcal/day (maintenance)")
+        print(f"Mild weight loss        (-0.5 lb/wk):  ~{g['mild']:.0f} kcal/day")
+        print(f"Weight loss             (-1.0 lb/wk):  ~{g['moderate']:.0f} kcal/day")
+        print(f"Extreme weight loss     (-2.0 lb/wk):  ~{g['upper_2lb']:.0f} kcal/day")
+        intake, _ = get_latest(conn, "intake_kcal")
+        if intake is not None:
+            print_intake_warning(tdee, intake, sex)
+    else:
+        print("----- Weight Gain -----")
+        print(f"TDEE:                    {tdee:.0f} kcal/day (maintenance)")
+        for label, rate in (("Mild weight gain       ", 0.5),
+                            ("Weight gain            ", 1.0),
+                            ("Extreme weight gain    ", 2.0)):
+            print(f"{label} (+{rate:.1f} lb/wk):  ~{tdee + rate_to_deficit(rate):.0f} kcal/day")
 
 
 def measured_bodyfat(conn):
@@ -513,7 +548,7 @@ def format_bodyfat_range(lo, hi):
 
 
 def display_bodyfat_range(conn):
-    """lean --bfp -r : body fat categories for your sex (both if no sex is
+    """lean --bodyfat --range : body fat categories for your sex (both if no sex is
     set yet), highest to lowest, marking yours if measurements exist."""
     sex, _ = get_latest(conn, "sex")
     height, _ = get_latest(conn, "height_cm")
@@ -540,7 +575,7 @@ def display_bodyfat_range(conn):
                 line += f"   <- you ({current[1]:.1f}%)"
             print(line)
     if not sex:
-        print("\n(Set your sex with lean -p -e to see only your range.)")
+        print("\n(Set your sex with lean --profile --edit to see only your range.)")
 
 
 def format_duration(weeks):
@@ -555,7 +590,7 @@ def display_bodyfat_projection(conn, values):
     weight change is fat, at 3500 kcal per pound."""
     weight_kg, _ = get_latest(conn, "weight_kg")
     if weight_kg is None:
-        print("[-] Log your weight first: lean --profile --edit")
+        print("[-] Log your weight first: lean --weight --edit")
         sys.exit(1)
     if len(values) == 2:
         start, goal = values
@@ -608,29 +643,44 @@ def display_bodyfat_projection(conn, values):
     print("(Rough estimate: assumes your lean mass stays the same and 3,500 kcal = 1 lb of fat.)")
 
 
-def display_deficit(conn):
+def display_intake(conn):
+    intake, _ = get_latest(conn, "intake_kcal")
+    if intake is None:
+        print("No intake logged yet. Run: lean --intake --edit")
+        return
+    print("----- Intake -----")
+    print(f"Intake:          {intake:.0f} kcal")
+
+
+def display_intake_balance(conn, want=None):
+    """Calorie deficit/surplus: TDEE minus your latest intake. want is
+    "deficit", "surplus", or None to just show whichever applies."""
     sex, height, age, activity = require_profile(conn)
     weight, _ = get_latest(conn, "weight_kg")
-    intake, intake_ts = get_latest(conn, "intake_kcal")
+    intake, _ = get_latest(conn, "intake_kcal")
     if weight is None or intake is None:
-        print("[-] Log your weight and intake first: lean --profile --edit")
+        print("[-] Log your weight and intake first: lean --weight --intake --edit")
         sys.exit(1)
 
     tdee = compute_tdee(sex, height, age, activity, weight)
-    deficit = tdee - intake
-    weekly_lb = abs(deficit) * 7 / 3500
+    net = tdee - intake  # positive = deficit, negative = surplus
+    if abs(net) < 0.5:
+        net = 0
+    weekly_lb = abs(net) * 7 / 3500
+    state = "deficit" if net > 0 else "surplus" if net < 0 else "maintenance"
 
-    print("----- Deficit -----")
+    print(f"----- {'Surplus' if (want or state) == 'surplus' else 'Deficit'} -----")
     print(f"TDEE:            {tdee:.0f} kcal/day")
     print(f"Intake:          {intake:.0f} kcal")
-    if deficit > 0:
-        print(f"Deficit:         -{deficit:.0f} kcal/day")
-        print(f"Est. weekly change: -{weekly_lb:.2f} lb (rough estimate)")
-    elif deficit < 0:
-        print(f"Surplus:         +{abs(deficit):.0f} kcal/day")
-        print(f"Est. weekly change: +{weekly_lb:.2f} lb (rough estimate)")
+    if state == "maintenance":
+        print("Balance:         0 kcal/day (maintenance)")
     else:
-        print("Deficit:         0 kcal/day (maintenance)")
+        if want and want != state:
+            print(f"No {want}: you're in a {state}.")
+        label = "Deficit" if state == "deficit" else "Surplus"
+        sign = "-" if state == "deficit" else "+"
+        print(f"{label}:{' ' * (16 - len(label))}{sign}{abs(net):.0f} kcal/day")
+        print(f"Est. weekly change: {sign}{weekly_lb:.2f} lb (rough estimate)")
 
     print_intake_warning(tdee, intake, sex)
 
@@ -671,16 +721,21 @@ def clear_topic(conn, topic, assume_yes=False):
 
 # --- DISPATCH -------------------------------------------------------------
 
-DISPLAY_HANDLERS = {"profile": display_profile, "bodyfat": display_bodyfat,
-                     "deficit": display_deficit, "weightloss": display_weightloss}
 EDIT_HANDLERS = {"profile": edit_profile, "bodyfat": edit_bodyfat,
-                  "deficit": edit_deficit}
-ALL_TOPICS = ("profile", "bodyfat", "deficit", "weightloss")
+                  "weight": edit_weight, "intake": edit_intake}
+
+# Every report --all runs, in order. (Not the --bodyfat GOAL projection,
+# which needs percentages you give it.)
+ALL_VIEWS = ("profile", "weight", "intake", "bodyfat", "range",
+             "deficit", "surplus", "loss", "gain")
+# Which topic each report modifier belongs to.
+MODIFIER_TOPIC = {"range": "bodyfat", "deficit": "intake", "surplus": "intake",
+                  "loss": "weight", "gain": "weight"}
 
 
 class BodyfatAction(argparse.Action):
     """Records "bodyfat" in the ordered topic list and keeps any percentages
-    that followed the flag (e.g. --bfp 22 17)."""
+    that followed the flag (e.g. --bodyfat 22 17)."""
     def __call__(self, parser, namespace, values, option_string=None):
         topics = list(getattr(namespace, "topics", None) or [])
         topics.append("bodyfat")
@@ -707,66 +762,72 @@ def run_topics(topics, func):
 def main():
     parser = argparse.ArgumentParser(
         prog="lean", description="Track calorie deficit and body fat estimates.",
-        formatter_class=argparse.RawDescriptionHelpFormatter,
+        formatter_class=argparse.RawDescriptionHelpFormatter, allow_abbrev=False,
         epilog="""\
 Options can be combined and run in the order given.
 
 examples:
-  lean -p                  show your profile
-  lean -p -e               update profile, weight and intake
-  lean -p --bfp -e         edit your profile, then your body fat measurements
-  lean --all               show profile, body fat, deficit and weight loss
-  lean --bfp 22 17         time to go from 22% to 17% body fat
-  lean --bfp -r            body fat ranges for each category
-  lean -p -e -c            delete everything stored in your profile
+  lean --profile                   show your profile
+  lean --profile --edit            update profile, weight and intake
+  lean --weight --intake --edit    log weight, then intake
+  lean --intake --deficit          your calorie deficit
+  lean --intake --surplus          your calorie surplus
+  lean --weight --loss             calorie targets for weight loss
+  lean --weight --gain             calorie targets for weight gain
+  lean --bodyfat --range           body fat ranges for each category
+  lean --bodyfat 22 17             time to go from 22% to 17% body fat
+  lean --all                       every report
+  lean --profile --edit --clear    delete everything stored in your profile
 """)
-    parser.add_argument("-p", "--profile", dest="topics", action="append_const", const="profile",
+    parser.add_argument("--profile", dest="topics", action="append_const", const="profile",
                         help="sex, age, height, weight, intake, activity level")
-    parser.add_argument("--bf", "--bfp", "--bodyfat", "--body-fat-percentage",
+    parser.add_argument("--weight", dest="topics", action="append_const", const="weight",
+                        help="your logged weight")
+    parser.add_argument("--loss", action="store_true",
+                        help="with --weight, calorie targets for weight loss")
+    parser.add_argument("--gain", action="store_true",
+                        help="with --weight, calorie targets for weight gain")
+    parser.add_argument("--intake", dest="topics", action="append_const", const="intake",
+                        help="your logged calorie intake")
+    parser.add_argument("--deficit", action="store_true",
+                        help="with --intake, your calorie deficit")
+    parser.add_argument("--surplus", action="store_true",
+                        help="with --intake, your calorie surplus")
+    parser.add_argument("--bodyfat", "--body-fat-percentage",
                         dest="bodyfat_values", action=BodyfatAction, nargs="*", metavar="PCT",
                         help="estimated body fat %% and category; with a goal "
-                             "(--bf [CURRENT] GOAL), time to get there")
-    parser.add_argument("-r", "--range", action="store_true",
-                        help="with --bf, show the body fat ranges for each category (by sex)")
-    parser.add_argument("-d", "--deficit", dest="topics", action="append_const", const="deficit",
-                        help="today's calorie deficit/surplus (-e logs weight and intake)")
-    parser.add_argument("--wl", "--weightloss", "--weight-loss", dest="topics",
-                        action="append_const", const="weightloss",
-                        help="TDEE and calorie weight loss targets (calculated; display only)")
+                             "(--bodyfat [CURRENT] GOAL), time to get there")
+    parser.add_argument("--range", action="store_true",
+                        help="with --bodyfat, show the body fat ranges for each category (by sex)")
     parser.add_argument("--all", dest="topics", action="append_const", const="all",
-                        help="show profile, body fat, deficit and weight loss (display only)")
+                        help="show every report (display only)")
 
-    parser.add_argument("-e", "--edit", action="store_true", help="update values")
-    parser.add_argument("-c", "--clear", action="store_true",
-                        help="delete all stored data for the topic (use with -e)")
-    parser.add_argument("-y", "--yes", action="store_true", help="skip the --clear confirmation")
+    parser.add_argument("--edit", action="store_true", help="update values")
+    parser.add_argument("--clear", action="store_true",
+                        help="delete all stored data for the topic (use with --edit)")
+    parser.add_argument("-y", dest="yes", action="store_true", help="skip the --clear confirmation")
 
     args = parser.parse_args()
     requested = args.topics or []
     values = args.bodyfat_values or []
+    modifiers = [m for m in MODIFIER_TOPIC if getattr(args, m)]
 
     if not requested:
-        parser.error("choose what to run, e.g. -p, --bf, -d, --wl or --all")
+        parser.error("choose what to run, e.g. --profile, --weight, --intake, --bodyfat or --all")
+    if "all" in requested and (len(requested) > 1 or values or modifiers or args.edit or args.clear):
+        parser.error("--all can't be combined with other options")
     if args.clear and not args.edit:
-        parser.error("--clear (-c) must be combined with --edit (-e)")
-    if args.range:
-        if "all" in requested:
-            parser.error("--range (-r) can't be combined with --all")
-        if "bodyfat" not in requested:
-            parser.error("--range (-r) goes with --bodyfat, e.g. lean --bfp -r")
+        parser.error("--clear must be combined with --edit")
+    for m in modifiers:
+        topic = MODIFIER_TOPIC[m]
+        if topic not in requested:
+            parser.error(f"--{m} goes with --{topic}, e.g. lean --{topic} --{m}")
         if args.edit or args.clear:
-            parser.error("--range (-r) can't be combined with --edit or --clear")
-        if values:
-            parser.error("--range (-r) can't be combined with body fat percentages")
-    if args.edit or args.clear:
-        if "all" in requested:
-            parser.error("--all is display only; it can't be combined with --edit or --clear")
-        if "weightloss" in requested:
-            parser.error("--weightloss is calculated from your profile and weight; it can't be edited or cleared")
-        if args.clear and "deficit" in requested:
-            parser.error("--deficit is calculated from your profile; clear that instead: -p -e -c")
-        if values:
-            parser.error("--bodyfat can't take percentages together with --edit or --clear")
+            parser.error(f"--{m} only shows a report; it can't be combined with --edit or --clear")
+    if values and (args.edit or args.clear):
+        parser.error("--bodyfat can't take percentages together with --edit or --clear")
+    if values and args.range:
+        parser.error("--range can't be combined with body fat percentages")
     if len(values) > 2:
         parser.error("--bodyfat takes at most two values: [CURRENT] GOAL")
     try:
@@ -774,19 +835,33 @@ examples:
     except ValueError as e:
         parser.error(str(e))
 
-    # Expand --all, drop repeats, keep the order the options were given in.
-    topics = list(dict.fromkeys(
-        t for r in requested for t in (ALL_TOPICS if r == "all" else (r,))))
-
-    def show(topic):
-        if topic == "bodyfat" and args.range:
-            display_bodyfat_range(conn)
-        elif topic == "bodyfat" and values:
-            display_bodyfat_projection(conn, values)
-        else:
-            DISPLAY_HANDLERS[topic](conn)
-
     conn = get_conn()
+    reports = {
+        "profile": lambda: display_profile(conn),
+        "weight": lambda: display_weight(conn),
+        "intake": lambda: display_intake(conn),
+        "bodyfat": lambda: display_bodyfat(conn),
+        "range": lambda: display_bodyfat_range(conn),
+        "projection": lambda: display_bodyfat_projection(conn, values),
+        "deficit": lambda: display_intake_balance(conn, "deficit"),
+        "surplus": lambda: display_intake_balance(conn, "surplus"),
+        "loss": lambda: display_weight_change(conn, "loss"),
+        "gain": lambda: display_weight_change(conn, "gain"),
+    }
+
+    # Turn the options into an ordered list of reports to show.
+    views = []
+    for t in requested:
+        if t == "all":
+            views += ALL_VIEWS
+        elif t == "bodyfat":
+            views.append("range" if args.range else "projection" if values else "bodyfat")
+        else:
+            chosen = [m for m in modifiers if MODIFIER_TOPIC[m] == t]
+            views += chosen or [t]
+    views = list(dict.fromkeys(views))
+    topics = list(dict.fromkeys(requested))
+
     status = 0
     try:
         if args.clear:
@@ -794,7 +869,7 @@ examples:
         elif args.edit:
             status = run_topics(topics, lambda t: EDIT_HANDLERS[t](conn))
         else:
-            status = run_topics(topics, show)
+            status = run_topics(views, lambda v: reports[v]())
     except (KeyboardInterrupt, EOFError):
         print("\n[!] Cancelled.")
         sys.exit(1)
