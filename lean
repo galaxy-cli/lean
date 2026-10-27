@@ -60,10 +60,20 @@ TOPIC_LABELS = {"profile": "profile (including weight and intake)"}
 # no unit is given, mass defaults to lb (matching how most people in
 # practice think of body weight) -- documented via the prompt hints.
 
-def parse_length(raw, label):
+def parse_length(raw, label, require_unit=False):
     """Parse a height/circumference measurement into centimeters.
-    Accepts "178cm", "70in", "5'10\"", or a bare number (assumed cm)."""
+    Accepts "178cm", "70in", "5'10\"", or a bare number (assumed cm).
+    With require_unit=True only an explicit in or cm value is accepted
+    (e.g. "15in", "38.1 cm"); bare numbers and feet'inches are rejected."""
     raw = raw.strip().lower()
+    if require_unit:
+        m = re.match(r"^(\d+(?:\.\d+)?)\s*(cm|in|inch|inches)$", raw)
+        if not m:
+            raise ValueError(f"Include a unit for {label} (in or cm), like 15in or 38.1cm")
+        val = float(m.group(1))
+        if val <= 0:
+            raise ValueError(f"{label.capitalize()} must be greater than 0")
+        return val * 2.54 if m.group(2).startswith("in") else val
     m = re.match(r"^(\d+)'\s*(\d+(?:\.\d+)?)\"?$", raw)
     if m:
         feet, inches = float(m.group(1)), float(m.group(2))
@@ -391,17 +401,17 @@ def edit_bodyfat(conn):
     cur_waist, _ = get_latest(conn, "waist_cm")
     cur_hip, _ = get_latest(conn, "hip_cm")
 
-    neck = prompt("Neck (e.g. 15in or 38cm)", cur_neck,
-                   lambda r: parse_length(r, "neck"),
+    neck = prompt("Neck (in or cm, e.g. 15in or 38cm)", cur_neck,
+                   lambda r: parse_length(r, "neck", require_unit=True),
                    hint=f"{cur_neck:.1f}cm" if cur_neck else None)
-    waist = prompt("Waist (e.g. 34in or 86cm)", cur_waist,
-                    lambda r: parse_length(r, "waist"),
+    waist = prompt("Waist (in or cm, e.g. 34in or 86cm)", cur_waist,
+                    lambda r: parse_length(r, "waist", require_unit=True),
                     hint=f"{cur_waist:.1f}cm" if cur_waist else None)
 
     fields = dict(waist_cm=waist, neck_cm=neck)
     if sex == "f":
-        fields["hip_cm"] = prompt("Hip (e.g. 38in or 97cm)", cur_hip,
-                                   lambda r: parse_length(r, "hip"),
+        fields["hip_cm"] = prompt("Hip (in or cm, e.g. 38in or 97cm)", cur_hip,
+                                   lambda r: parse_length(r, "hip", require_unit=True),
                                    hint=f"{cur_hip:.1f}cm" if cur_hip else None)
 
     insert_entry(conn, **fields)
