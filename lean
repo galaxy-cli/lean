@@ -60,6 +60,12 @@ TOPIC_LABELS = {"profile": "profile (including weight and intake)"}
 # no unit is given, mass defaults to lb (matching how most people in
 # practice think of body weight) -- documented via the prompt hints.
 
+def add_decimal(raw):
+    """Give a leading whole number a decimal part: "228lb" -> "228.0lb".
+    Numbers that already have one are left alone."""
+    return re.sub(r"^(\d+)(?![\d.])", r"\1.0", raw.strip())
+
+
 def parse_length(raw, label, require_unit=False):
     """Parse a height/circumference measurement into centimeters.
     Accepts "178cm", "70in", "5'10\"", or a bare number (assumed cm).
@@ -67,6 +73,7 @@ def parse_length(raw, label, require_unit=False):
     (e.g. "15in", "38.1 cm"); bare numbers and feet'inches are rejected."""
     raw = raw.strip().lower()
     if require_unit:
+        raw = add_decimal(raw)
         m = re.match(r"^(\d+(?:\.\d+)?)\s*(cm|in|inch|inches)$", raw)
         if not m:
             raise ValueError(f"Include a unit for {label} (in or cm), like 15in or 38.1cm")
@@ -78,6 +85,7 @@ def parse_length(raw, label, require_unit=False):
     if m:
         feet, inches = float(m.group(1)), float(m.group(2))
         return (feet * 12 + inches) * 2.54
+    raw = add_decimal(raw)
     m = re.match(r"^([\d.]+)\s*(cm|in|inch|inches)?$", raw)
     if m:
         val = float(m.group(1))
@@ -89,7 +97,7 @@ def parse_length(raw, label, require_unit=False):
 def parse_mass(raw, label):
     """Parse a weight measurement into kilograms.
     Accepts "72kg", "160lb", "160lbs", or a bare number (assumed lb)."""
-    raw = raw.strip().lower()
+    raw = add_decimal(raw.strip().lower())
     m = re.match(r"^([\d.]+)\s*(kg|lb|lbs|pounds?)?$", raw)
     if m:
         val = float(m.group(1))
@@ -496,6 +504,45 @@ def display_bodyfat(conn):
     print("(Navy method estimate -- accuracy varies at extremes)")
 
 
+def format_bodyfat_range(lo, hi):
+    if lo <= 0:
+        return f"{hi}% or less"
+    if hi >= 100:
+        return f"{lo}% or more"
+    return f"{lo}-{hi}%"
+
+
+def display_bodyfat_range(conn):
+    """lean --bfp -r : body fat categories for your sex (both if no sex is
+    set yet), highest to lowest, marking yours if measurements exist."""
+    sex, _ = get_latest(conn, "sex")
+    height, _ = get_latest(conn, "height_cm")
+    waist, _ = get_latest(conn, "waist_cm")
+    neck, _ = get_latest(conn, "neck_cm")
+    hip, _ = get_latest(conn, "hip_cm")
+
+    current = None  # (category, pct), only if everything needed is on file
+    if sex and height and waist and neck and (sex == "m" or hip):
+        try:
+            pct = calc_bodyfat(sex, waist, neck, height, hip)
+            current = (bodyfat_category(sex, pct), pct)
+        except ValueError:
+            pass
+
+    sexes = [sex] if sex else ["m", "f"]
+    for i, sx in enumerate(sexes):
+        if i:
+            print()
+        print(f"----- Body Fat Ranges ({'male' if sx == 'm' else 'female'}) -----")
+        for name, lo, hi in reversed(BODYFAT_CATEGORIES[sx]):
+            line = f"{name:<15}{format_bodyfat_range(lo, hi)}"
+            if current and current[0] == name:
+                line += f"   <- you ({current[1]:.1f}%)"
+            print(line)
+    if not sex:
+        print("\n(Set your sex with lean -p -e to see only your range.)")
+
+
 def format_duration(weeks):
     months = weeks / (52 / 12)
     whole = max(1, round(weeks))
@@ -628,7 +675,33 @@ DISPLAY_HANDLERS = {"profile": display_profile, "bodyfat": display_bodyfat,
                      "deficit": display_deficit, "weightloss": display_weightloss}
 EDIT_HANDLERS = {"profile": edit_profile, "bodyfat": edit_bodyfat,
                   "deficit": edit_deficit}
-TOPICS = tuple(DISPLAY_HANDLERS)
+ALL_TOPICS = ("profile", "bodyfat", "deficit", "weightloss")
+
+
+class BodyfatAction(argparse.Action):
+    """Records "bodyfat" in the ordered topic list and keeps any percentages
+    that followed the flag (e.g. --bfp 22 17)."""
+    def __call__(self, parser, namespace, values, option_string=None):
+        topics = list(getattr(namespace, "topics", None) or [])
+        topics.append("bodyfat")
+        namespace.topics = topics
+        namespace.bodyfat_values = list(values)
+
+
+def run_topics(topics, func):
+    """Run func(topic) for each topic in order, with a blank line between.
+    A topic that bails out (e.g. missing data) doesn't stop the rest; the
+    exit status is 1 if any of them did."""
+    status = 0
+    for i, topic in enumerate(topics):
+        if i:
+            print()
+        try:
+            func(topic)
+        except SystemExit as e:
+            if e.code not in (None, 0):
+                status = 1
+    return status
 
 
 def main():
@@ -636,58 +709,99 @@ def main():
         prog="lean", description="Track calorie deficit and body fat estimates.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""\
-examples:
-  lean --profile                 show profile, weight and intake
-  lean --profile --edit          update profile, weight and intake
-  lean --profile --edit --clear  delete everything stored for a topic
-  lean --weightloss              TDEE and calorie weightloss points
-  lean --bodyfat 22 17           time to go from 22% to 17% body fat
-  lean --bodyfat 15              time to reach 15% from your measured body fat
-""")
-    topic = parser.add_mutually_exclusive_group(required=True)
-    topic.add_argument("--profile", action="store_true", help="sex, height, age, activity level, weight, intake")
-    topic.add_argument("--bodyfat", nargs="*", metavar="PCT", default=None,
-                       help="estimated body fat %% and category; with a goal (--bodyfat [CURRENT] GOAL), time to get there")
-    topic.add_argument("--deficit", action="store_true", help="today's calorie deficit/surplus (--edit logs weight and intake)")
-    topic.add_argument("--weightloss", action="store_true",
-                       help="TDEE and calorie weightloss points (calculated; display only)")
+Options can be combined and run in the order given.
 
-    parser.add_argument("--edit", action="store_true", help="update values")
-    parser.add_argument("--clear", action="store_true",
-                        help="delete all stored data for the topic (use with --edit)")
+examples:
+  lean -p                  show your profile
+  lean -p -e               update profile, weight and intake
+  lean -p --bfp -e         edit your profile, then your body fat measurements
+  lean --all               show profile, body fat, deficit and weight loss
+  lean --bfp 22 17         time to go from 22% to 17% body fat
+  lean --bfp -r            body fat ranges for each category
+  lean -p -e -c            delete everything stored in your profile
+""")
+    parser.add_argument("-p", "--profile", dest="topics", action="append_const", const="profile",
+                        help="sex, age, height, weight, intake, activity level")
+    parser.add_argument("--bf", "--bfp", "--bodyfat", "--body-fat-percentage",
+                        dest="bodyfat_values", action=BodyfatAction, nargs="*", metavar="PCT",
+                        help="estimated body fat %% and category; with a goal "
+                             "(--bf [CURRENT] GOAL), time to get there")
+    parser.add_argument("-r", "--range", action="store_true",
+                        help="with --bf, show the body fat ranges for each category (by sex)")
+    parser.add_argument("-d", "--deficit", dest="topics", action="append_const", const="deficit",
+                        help="today's calorie deficit/surplus (-e logs weight and intake)")
+    parser.add_argument("--wl", "--weightloss", "--weight-loss", dest="topics",
+                        action="append_const", const="weightloss",
+                        help="TDEE and calorie weight loss targets (calculated; display only)")
+    parser.add_argument("--all", dest="topics", action="append_const", const="all",
+                        help="show profile, body fat, deficit and weight loss (display only)")
+
+    parser.add_argument("-e", "--edit", action="store_true", help="update values")
+    parser.add_argument("-c", "--clear", action="store_true",
+                        help="delete all stored data for the topic (use with -e)")
     parser.add_argument("-y", "--yes", action="store_true", help="skip the --clear confirmation")
 
     args = parser.parse_args()
-    if args.bodyfat:
-        if len(args.bodyfat) > 2:
-            parser.error("--bodyfat takes at most two values: [CURRENT] GOAL")
-        if args.edit or args.clear:
-            parser.error("--bodyfat can't take percentages together with --edit or --clear")
-        try:
-            args.bodyfat = [parse_percent(v) for v in args.bodyfat]
-        except ValueError as e:
-            parser.error(str(e))
+    requested = args.topics or []
+    values = args.bodyfat_values or []
+
+    if not requested:
+        parser.error("choose what to run, e.g. -p, --bf, -d, --wl or --all")
     if args.clear and not args.edit:
-        parser.error("--clear must be combined with --edit")
-    if args.weightloss and (args.edit or args.clear):
-        parser.error("--weightloss is calculated from your profile and weight; it can't be edited or cleared")
-    topic_name = next(t for t in TOPICS if getattr(args, t) not in (None, False))
+        parser.error("--clear (-c) must be combined with --edit (-e)")
+    if args.range:
+        if "all" in requested:
+            parser.error("--range (-r) can't be combined with --all")
+        if "bodyfat" not in requested:
+            parser.error("--range (-r) goes with --bodyfat, e.g. lean --bfp -r")
+        if args.edit or args.clear:
+            parser.error("--range (-r) can't be combined with --edit or --clear")
+        if values:
+            parser.error("--range (-r) can't be combined with body fat percentages")
+    if args.edit or args.clear:
+        if "all" in requested:
+            parser.error("--all is display only; it can't be combined with --edit or --clear")
+        if "weightloss" in requested:
+            parser.error("--weightloss is calculated from your profile and weight; it can't be edited or cleared")
+        if args.clear and "deficit" in requested:
+            parser.error("--deficit is calculated from your profile; clear that instead: -p -e -c")
+        if values:
+            parser.error("--bodyfat can't take percentages together with --edit or --clear")
+    if len(values) > 2:
+        parser.error("--bodyfat takes at most two values: [CURRENT] GOAL")
+    try:
+        values = [parse_percent(v) for v in values]
+    except ValueError as e:
+        parser.error(str(e))
+
+    # Expand --all, drop repeats, keep the order the options were given in.
+    topics = list(dict.fromkeys(
+        t for r in requested for t in (ALL_TOPICS if r == "all" else (r,))))
+
+    def show(topic):
+        if topic == "bodyfat" and args.range:
+            display_bodyfat_range(conn)
+        elif topic == "bodyfat" and values:
+            display_bodyfat_projection(conn, values)
+        else:
+            DISPLAY_HANDLERS[topic](conn)
 
     conn = get_conn()
+    status = 0
     try:
         if args.clear:
-            clear_topic(conn, topic_name, args.yes)
+            status = run_topics(topics, lambda t: clear_topic(conn, t, args.yes))
         elif args.edit:
-            EDIT_HANDLERS[topic_name](conn)
-        elif topic_name == "bodyfat" and args.bodyfat:
-            display_bodyfat_projection(conn, args.bodyfat)
+            status = run_topics(topics, lambda t: EDIT_HANDLERS[t](conn))
         else:
-            DISPLAY_HANDLERS[topic_name](conn)
+            status = run_topics(topics, show)
     except (KeyboardInterrupt, EOFError):
         print("\n[!] Cancelled.")
         sys.exit(1)
     finally:
         conn.close()
+    if status:
+        sys.exit(status)
 
 
 if __name__ == "__main__":
