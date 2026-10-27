@@ -134,6 +134,17 @@ def parse_kcal(raw):
     return val
 
 
+def parse_percent(raw):
+    """Parse a body fat percentage like "22" or "22%"."""
+    try:
+        val = float(raw.strip().rstrip("%"))
+    except ValueError:
+        raise ValueError(f"'{raw}' isn't a number")
+    if not 0 < val < 100:
+        raise ValueError(f"{raw} isn't a valid body fat percentage (use 1-99)")
+    return val
+
+
 def kg_to_lb(kg):
     return kg * 2.20462
 
@@ -459,7 +470,8 @@ def display_weightloss(conn):
         print_intake_warning(tdee, intake, sex)
 
 
-def display_bodyfat(conn):
+def measured_bodyfat(conn):
+    """(sex, body fat %) from your latest measurements, or exit with a hint."""
     sex, height, age, activity = require_profile(conn)
     waist, _ = get_latest(conn, "waist_cm")
     neck, _ = get_latest(conn, "neck_cm")
@@ -470,15 +482,83 @@ def display_bodyfat(conn):
         sys.exit(1)
 
     try:
-        pct = calc_bodyfat(sex, waist, neck, height, hip)
+        return sex, calc_bodyfat(sex, waist, neck, height, hip)
     except ValueError as e:
         print(f"[-] Measurements don't produce a valid result ({e}).")
         sys.exit(1)
 
+
+def display_bodyfat(conn):
+    sex, pct = measured_bodyfat(conn)
     print("----- Body Fat -----")
     print(f"Estimate:        {pct:.1f}%")
     print(f"Category:        {bodyfat_category(sex, pct)}")
     print("(Navy method estimate -- accuracy varies at extremes)")
+
+
+def format_duration(weeks):
+    months = weeks / (52 / 12)
+    whole = max(1, round(weeks))
+    return f"~{whole} week{'s' if whole != 1 else ''} (~{months:.1f} months)"
+
+
+def display_bodyfat_projection(conn, values):
+    """lean --bodyfat CURRENT GOAL  (or just GOAL, starting from your
+    measured body fat). Assumes lean mass stays constant, so the whole
+    weight change is fat, at 3500 kcal per pound."""
+    weight_kg, _ = get_latest(conn, "weight_kg")
+    if weight_kg is None:
+        print("[-] Log your weight first: lean --profile --edit")
+        sys.exit(1)
+    if len(values) == 2:
+        start, goal = values
+    else:
+        _, start = measured_bodyfat(conn)
+        goal = values[0]
+
+    if abs(goal - start) < 0.05:
+        print(f"Body fat is already {start:.1f}% -- nothing to change.")
+        return
+
+    weight_lb = kg_to_lb(weight_kg)
+    lean_lb = weight_lb * (1 - start / 100)
+    target_lb = lean_lb / (1 - goal / 100)
+    delta_lb = target_lb - weight_lb
+    delta_kg = delta_lb / 2.20462
+    losing = delta_lb < 0
+
+    print("----- Body Fat Projection -----")
+    print(f"Body fat:        {start:.1f}% -> {goal:.1f}%")
+    print(f"Weight:          {weight_lb:.1f} lb -> {target_lb:.1f} lb")
+    print(f"Fat to {'lose' if losing else 'gain'}:     {abs(delta_lb):.1f} lb ({abs(delta_kg):.1f} kg)")
+
+    result = current_tdee(conn)
+    intake, _ = get_latest(conn, "intake_kcal")
+    print()
+    print("Estimated time:")
+    if result and intake is not None:
+        tdee, sex = result
+        net = tdee - intake  # positive = deficit
+        if net == 0:
+            print(f"  At your intake ({intake:.0f} kcal): maintenance, so no change")
+        elif (net > 0) == losing:
+            rate = abs(net) * 7 / 3500
+            print(f"  At your intake ({intake:.0f} kcal, {rate:.2f} lb/wk): "
+                  f"{format_duration(abs(delta_lb) / rate)}")
+        else:
+            kind = "surplus" if net < 0 else "deficit"
+            print(f"  At your intake ({intake:.0f} kcal) you're in a {kind}, which moves you the other way")
+    for rate in (0.5, 1.0):
+        text = f"  At {rate:.1f} lb/wk"
+        if result:
+            tdee, sex = result
+            kcal = tdee - rate_to_deficit(rate) if losing else tdee + rate_to_deficit(rate)
+            text += f" (~{kcal:.0f} kcal/day)"
+            if losing and kcal < nutrition_floor(sex):
+                text += " [!] below the general safe minimum"
+        print(f"{text}: {format_duration(abs(delta_lb) / rate)}")
+    print()
+    print("(Rough estimate: assumes your lean mass stays the same and 3,500 kcal = 1 lb of fat.)")
 
 
 def display_deficit(conn):
@@ -561,10 +641,13 @@ examples:
   lean --profile --edit          update profile, weight and intake
   lean --profile --edit --clear  delete everything stored for a topic
   lean --weightloss              TDEE and calorie weightloss points
+  lean --bodyfat 22 17           time to go from 22% to 17% body fat
+  lean --bodyfat 15              time to reach 15% from your measured body fat
 """)
     topic = parser.add_mutually_exclusive_group(required=True)
     topic.add_argument("--profile", action="store_true", help="sex, height, age, activity level, weight, intake")
-    topic.add_argument("--bodyfat", action="store_true", help="estimated body fat %% and category")    
+    topic.add_argument("--bodyfat", nargs="*", metavar="PCT", default=None,
+                       help="estimated body fat %% and category; with a goal (--bodyfat [CURRENT] GOAL), time to get there")
     topic.add_argument("--deficit", action="store_true", help="today's calorie deficit/surplus (--edit logs weight and intake)")
     topic.add_argument("--weightloss", action="store_true",
                        help="TDEE and calorie weightloss points (calculated; display only)")
@@ -575,11 +658,20 @@ examples:
     parser.add_argument("-y", "--yes", action="store_true", help="skip the --clear confirmation")
 
     args = parser.parse_args()
+    if args.bodyfat:
+        if len(args.bodyfat) > 2:
+            parser.error("--bodyfat takes at most two values: [CURRENT] GOAL")
+        if args.edit or args.clear:
+            parser.error("--bodyfat can't take percentages together with --edit or --clear")
+        try:
+            args.bodyfat = [parse_percent(v) for v in args.bodyfat]
+        except ValueError as e:
+            parser.error(str(e))
     if args.clear and not args.edit:
         parser.error("--clear must be combined with --edit")
     if args.weightloss and (args.edit or args.clear):
         parser.error("--weightloss is calculated from your profile and weight; it can't be edited or cleared")
-    topic_name = next(t for t in TOPICS if getattr(args, t))
+    topic_name = next(t for t in TOPICS if getattr(args, t) not in (None, False))
 
     conn = get_conn()
     try:
@@ -587,6 +679,8 @@ examples:
             clear_topic(conn, topic_name, args.yes)
         elif args.edit:
             EDIT_HANDLERS[topic_name](conn)
+        elif topic_name == "bodyfat" and args.bodyfat:
+            display_bodyfat_projection(conn, args.bodyfat)
         else:
             DISPLAY_HANDLERS[topic_name](conn)
     except (KeyboardInterrupt, EOFError):
