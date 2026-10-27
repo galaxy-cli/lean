@@ -648,7 +648,7 @@ def display_intake(conn):
     if intake is None:
         print("No intake logged yet. Run: lean --intake --edit")
         return
-    print("----- Intake -----")
+    print("----- Caloric Intake -----")
     print(f"Intake:          {intake:.0f} kcal")
 
 
@@ -669,7 +669,7 @@ def display_intake_balance(conn, want=None):
     weekly_lb = abs(net) * 7 / 3500
     state = "deficit" if net > 0 else "surplus" if net < 0 else "maintenance"
 
-    print(f"----- {'Surplus' if (want or state) == 'surplus' else 'Deficit'} -----")
+    print(f"----- {'Caloric Surplus' if (want or state) == 'surplus' else 'Caloric Deficit'} -----")
     print(f"TDEE:            {tdee:.0f} kcal/day")
     print(f"Intake:          {intake:.0f} kcal")
     if state == "maintenance":
