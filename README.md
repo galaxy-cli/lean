@@ -43,7 +43,7 @@ lean --profile --edit     # set up your profile, weight and intake
 lean --intake --deficit   # see your daily calorie deficit
 lean --weight --loss      # see calorie targets for weight loss
 lean --weight --gain      # see calorie targets for weight gain
-lean --bodyfat --edit     # log neck/waist measurements
+lean --bodyfat --edit     # log weight and neck/waist measurements
 lean --bodyfat            # see your body fat estimate
 lean --bodyfat 22 17      # how long to go from 22% to 17% body fat
 lean --bodyfat --range    # body fat ranges for each category
@@ -90,7 +90,7 @@ Modifiers:
 | `lean --intake --deficit` | Show your calorie deficit and estimated weekly loss |
 | `lean --intake --surplus` | Show your calorie surplus and estimated weekly gain |
 | `lean --bodyfat` | Show your estimated body fat % and category |
-| `lean --bodyfat --edit` | Log neck and waist (and hip for women) measurements |
+| `lean --bodyfat --edit` | Log your weight (Enter to skip), then neck and waist (and hip for women) |
 | `lean --bodyfat --range` | Show the body fat ranges (obese to essential fat) for your sex |
 | `lean --bodyfat 22 17` | Project the weight change and time to go from 22% to 17% body fat |
 | `lean --bodyfat 17` | Same, starting from your measured body fat |
@@ -98,7 +98,7 @@ Modifiers:
 | `lean --profile --edit --clear` | Delete all stored profile data (including weight and intake) |
 | `lean --weight --edit --clear` | Delete all logged weights |
 | `lean --intake --edit --clear` | Delete all logged intake values |
-| `lean --bodyfat --edit --clear` | Delete all stored body fat measurements |
+| `lean --bodyfat --edit --clear` | Delete all stored body fat measurements (logged weights are kept) |
 
 If you ask for `--intake --deficit` while you're actually in a surplus (or the other way around), `lean` says so and shows the real number, so you always see where you stand.
 

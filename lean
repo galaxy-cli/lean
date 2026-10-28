@@ -344,7 +344,7 @@ def prompt_log(label, current, cast, hint=None):
     (nothing is recorded); the last logged value is shown for reference."""
     shown = f" [{hint if hint is not None else current}]" if current is not None else ""
     while True:
-        raw = input(f"{label}{shown} (Enter to skip): ").strip()
+        raw = input(f"{label}{shown}: ").strip()
         if not raw:
             return None
         try:
@@ -437,6 +437,9 @@ def edit_bodyfat(conn):
     cur_waist, _ = get_latest(conn, "waist_cm")
     cur_hip, _ = get_latest(conn, "hip_cm")
 
+    # Weight first (Enter skips it), same as in the profile.
+    weight_fields = prompt_weight(conn)
+
     neck = prompt("Neck (in or cm, e.g. 15in or 38cm)", cur_neck,
                    lambda r: parse_length(r, "neck", require_unit=True),
                    hint=f"{cur_neck:.1f}cm" if cur_neck else None)
@@ -444,14 +447,14 @@ def edit_bodyfat(conn):
                     lambda r: parse_length(r, "waist", require_unit=True),
                     hint=f"{cur_waist:.1f}cm" if cur_waist else None)
 
-    fields = dict(waist_cm=waist, neck_cm=neck)
+    fields = dict(waist_cm=waist, neck_cm=neck, **weight_fields)
     if sex == "f":
         fields["hip_cm"] = prompt("Hip (in or cm, e.g. 38in or 97cm)", cur_hip,
                                    lambda r: parse_length(r, "hip", require_unit=True),
                                    hint=f"{cur_hip:.1f}cm" if cur_hip else None)
 
     insert_entry(conn, **fields)
-    print("\n[+] Measurements logged.")
+    print("\n[+] Measurements and weight logged." if weight_fields else "\n[+] Measurements logged.")
 
 
 # --- DISPLAY HANDLERS -----------------------------------------------------
@@ -648,7 +651,7 @@ def display_intake(conn):
     if intake is None:
         print("No intake logged yet. Run: lean --intake --edit")
         return
-    print("----- Caloric Intake -----")
+    print("----- Intake -----")
     print(f"Intake:          {intake:.0f} kcal")
 
 
@@ -669,7 +672,7 @@ def display_intake_balance(conn, want=None):
     weekly_lb = abs(net) * 7 / 3500
     state = "deficit" if net > 0 else "surplus" if net < 0 else "maintenance"
 
-    print(f"----- {'Caloric Surplus' if (want or state) == 'surplus' else 'Caloric Deficit'} -----")
+    print(f"----- {'Surplus' if (want or state) == 'surplus' else 'Deficit'} -----")
     print(f"TDEE:            {tdee:.0f} kcal/day")
     print(f"Intake:          {intake:.0f} kcal")
     if state == "maintenance":
