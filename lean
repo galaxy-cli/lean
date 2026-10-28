@@ -615,7 +615,7 @@ def display_bodyfat_projection(conn, values):
     print("----- Body Fat Projection -----")
     print(f"Body fat:        {start:.1f}% -> {goal:.1f}%")
     print(f"Weight:          {weight_lb:.1f} lb -> {target_lb:.1f} lb")
-    print(f"Fat to {'lose' if losing else 'gain'}:     {abs(delta_lb):.1f} lb ({abs(delta_kg):.1f} kg)")
+    print(f"Weight to {'lose' if losing else 'gain'}:     {abs(delta_lb):.1f} lb ({abs(delta_kg):.1f} kg)")
 
     result = current_tdee(conn)
     intake, _ = get_latest(conn, "intake_kcal")
