@@ -344,7 +344,7 @@ def prompt_log(label, current, cast, hint=None):
     (nothing is recorded); the last logged value is shown for reference."""
     shown = f" [{hint if hint is not None else current}]" if current is not None else ""
     while True:
-        raw = input(f"{label}{shown}: ").strip()
+        raw = input(f"{label}{shown} (Enter to skip): ").strip()
         if not raw:
             return None
         try:
@@ -613,7 +613,9 @@ def display_bodyfat_projection(conn, values):
     losing = delta_lb < 0
 
     print("----- Body Fat Projection -----")
-    print(f"Body fat:        {start:.1f}% -> {goal:.1f}%")
+    pct_change = f"{abs(goal - start):.1f}".rstrip("0").rstrip(".")
+    print(f"Body fat:        {start:.1f}% -> {goal:.1f}% "
+          f"({'Lose' if losing else 'Gain'} {pct_change}%)")
     print(f"Weight:          {weight_lb:.1f} lb -> {target_lb:.1f} lb")
     print(f"Weight to {'lose' if losing else 'gain'}:     {abs(delta_lb):.1f} lb ({abs(delta_kg):.1f} kg)")
 

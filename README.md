@@ -82,15 +82,15 @@ Modifiers:
 | `lean --profile` | Show your profile, weight and intake |
 | `lean --profile --edit` | Update your profile, weight and intake |
 | `lean --weight` | Show your logged weight |
-| `lean --weight --edit` | Log your weight (press Enter to skip) |
+| `lean --weight --edit` | Log your weight |
 | `lean --weight --loss` | Show your TDEE and calorie targets for losing 0.5, 1 or 2 lb/week |
 | `lean --weight --gain` | Show your TDEE and calorie targets for gaining 0.5, 1 or 2 lb/week |
 | `lean --intake` | Show your logged calorie intake |
-| `lean --intake --edit` | Log your intake (press Enter to skip) |
+| `lean --intake --edit` | Log your intake |
 | `lean --intake --deficit` | Show your calorie deficit and estimated weekly loss |
 | `lean --intake --surplus` | Show your calorie surplus and estimated weekly gain |
 | `lean --bodyfat` | Show your estimated body fat % and category |
-| `lean --bodyfat --edit` | Log your weight (Enter to skip), then neck and waist (and hip for women) |
+| `lean --bodyfat --edit` | Log your weight, then neck and waist (and hip for women) |
 | `lean --bodyfat --range` | Show the body fat ranges (obese to essential fat) for your sex |
 | `lean --bodyfat 22 17` | Project the weight change and time to go from 22% to 17% body fat |
 | `lean --bodyfat 17` | Same, starting from your measured body fat |
@@ -198,7 +198,7 @@ $ lean --bodyfat 22 17
 ----- Body Fat Projection -----
 Body fat:        22.0% -> 17.0%
 Weight:          160.0 lb -> 150.4 lb
-Fat to lose:     9.6 lb (4.4 kg)
+Weight to lose:     9.6 lb (4.4 kg)
 
 Estimated time:
   At your intake (2200 kcal, 0.85 lb/wk): ~11 weeks (~2.6 months)
